@@ -93,6 +93,7 @@ class AbstractMLForecastModel(AbstractTimeSeriesModel):
         self._residuals_std_per_item: pd.Series
         self._train_target_median: Optional[float] = None
         self._non_boolean_real_covariates: list[str] = []
+        self._past_covariate_lag_columns: list[str] = []
 
     def _initialize_transforms_and_regressor(self):
         super()._initialize_transforms_and_regressor()
@@ -238,6 +239,7 @@ class AbstractMLForecastModel(AbstractTimeSeriesModel):
             how="left",
             on=[MLF_ITEMID, MLF_TIMESTAMP],
         )
+        self._past_covariate_lag_columns = lag_columns
         return df
 
     def _generate_train_val_dfs(
@@ -323,6 +325,10 @@ class AbstractMLForecastModel(AbstractTimeSeriesModel):
 
         if include_target and len(self.covariate_metadata.past_covariates) > 0:
             df = self._add_past_covariate_lags(df)
+        elif not include_target and len(self._past_covariate_lag_columns) > 0:
+            missing_columns = [col for col in self._past_covariate_lag_columns if col not in df.columns]
+            if missing_columns:
+                df[missing_columns] = np.nan
 
         for col in self._non_boolean_real_covariates:
             # Normalize non-boolean features using mean_abs scaling
