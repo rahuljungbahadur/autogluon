@@ -59,6 +59,7 @@ class TabularModel(BaseEstimator):
 
 class AbstractMLForecastModel(AbstractTimeSeriesModel):
     _supports_known_covariates = True
+    _supports_past_covariates = True
     _supports_static_features = True
 
     def __init__(
@@ -211,6 +212,34 @@ class AbstractMLForecastModel(AbstractTimeSeriesModel):
         logger.debug(f"Shortening all series to at most {max_length}")
         return mlforecast_df.groupby(MLF_ITEMID, as_index=False, sort=False).tail(max_length)
 
+    def _add_past_covariate_lags(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Add lagged versions of past covariates that can be used at prediction time."""
+        past_covariates = [col for col in self.covariate_metadata.past_covariates if col in df.columns]
+        if not past_covariates:
+            return df
+        if not hasattr(self, "_target_lags") or len(self._target_lags) == 0:
+            logger.debug("Skipping past covariate lags because no target lags are defined.")
+            return df.drop(columns=past_covariates, errors="ignore")
+        from mlforecast.feature_engineering import transform_exog
+
+        base_columns = [MLF_ITEMID, MLF_TIMESTAMP] + past_covariates
+        exog_with_lags = transform_exog(
+            df[base_columns],
+            lags=self._target_lags.tolist(),
+            id_col=MLF_ITEMID,
+            time_col=MLF_TIMESTAMP,
+        )
+        lag_columns = [col for col in exog_with_lags.columns if col not in base_columns]
+        df = df.drop(columns=past_covariates, errors="ignore")
+        if len(lag_columns) == 0:
+            return df
+        df = df.merge(
+            exog_with_lags[[MLF_ITEMID, MLF_TIMESTAMP] + lag_columns],
+            how="left",
+            on=[MLF_ITEMID, MLF_TIMESTAMP],
+        )
+        return df
+
     def _generate_train_val_dfs(
         self, data: TimeSeriesDataFrame, max_num_items: Optional[int] = None, max_num_samples: Optional[int] = None
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -272,19 +301,28 @@ class AbstractMLForecastModel(AbstractTimeSeriesModel):
         """Convert TimeSeriesDataFrame to a format expected by MLForecast methods `predict` and `preprocess`.
 
         Each row contains unique_id, ds, y, and (optionally) known covariates & static features.
+        Past covariates are converted into lagged features so that they can be used during prediction.
         """
-        # TODO: Add support for past_covariates
         selected_columns = self.covariate_metadata.known_covariates.copy()
         column_name_mapping = {TimeSeriesDataFrame.ITEMID: MLF_ITEMID, TimeSeriesDataFrame.TIMESTAMP: MLF_TIMESTAMP}
         if include_target:
-            selected_columns += [self.target]
+            selected_columns += self.covariate_metadata.past_covariates + [self.target]
             column_name_mapping[self.target] = MLF_TARGET
 
         df = pd.DataFrame(data)[selected_columns].reset_index()
+        df = df.rename(columns=column_name_mapping)
         if static_features is not None:
             df = pd.merge(
-                df, static_features, how="left", on=TimeSeriesDataFrame.ITEMID, suffixes=(None, "_static_feat")
+                df,
+                static_features,
+                how="left",
+                left_on=MLF_ITEMID,
+                right_index=True,
+                suffixes=(None, "_static_feat"),
             )
+
+        if include_target and len(self.covariate_metadata.past_covariates) > 0:
+            df = self._add_past_covariate_lags(df)
 
         for col in self._non_boolean_real_covariates:
             # Normalize non-boolean features using mean_abs scaling
@@ -292,9 +330,9 @@ class AbstractMLForecastModel(AbstractTimeSeriesModel):
                 df[col]
                 / df[col]
                 .abs()
-                .groupby(df[TimeSeriesDataFrame.ITEMID])
+                .groupby(df[MLF_ITEMID])
                 .mean()
-                .reindex(df[TimeSeriesDataFrame.ITEMID])
+                .reindex(df[MLF_ITEMID])
                 .values
             )
 
@@ -303,7 +341,7 @@ class AbstractMLForecastModel(AbstractTimeSeriesModel):
         df[float64_cols] = df[float64_cols].astype("float32")
 
         # We assume that df is sorted by 'unique_id' inside `TimeSeriesPredictor._check_and_prepare_data_frame`
-        return df.rename(columns=column_name_mapping)
+        return df
 
     def _fit(
         self,
@@ -465,6 +503,7 @@ class DirectTabularModel(AbstractMLForecastModel):
 
     - lag features (observed time series values) based on ``freq`` of the data
     - time features (e.g., day of the week) based on the timestamp of the measurement
+    - lagged past covariates (if available)
     - known covariates (if available)
     - static features of each item (if available)
 
@@ -650,6 +689,7 @@ class RecursiveTabularModel(AbstractMLForecastModel):
 
     - lag features (observed time series values) based on ``freq`` of the data
     - time features (e.g., day of the week) based on the timestamp of the measurement
+    - lagged past covariates (if available)
     - known covariates (if available)
     - static features of each item (if available)
 

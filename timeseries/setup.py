@@ -36,9 +36,9 @@ install_requires = [
     "gluonts>=0.15.0,<0.17",
     "networkx",  # version range defined in `core/_setup_utils.py`
     "statsforecast>=1.7.0,<2.0.2",
-    "mlforecast>=0.14.0,<0.15.0",  # cannot upgrade since v0.15.0 introduced a breaking change to DirectTabular
-    "utilsforecast>=0.2.3,<0.2.12",  # to prevent breaking changes that propagate through mlforecast's dependency
-    "coreforecast>=0.0.12,<0.0.17",  # to prevent breaking changes that propagate through mlforecast's dependency
+    "mlforecast>=1.0.2,<1.1",
+    "utilsforecast>=0.2.14,<0.3",  # keep upper bound to avoid unexpected breaking changes
+    "coreforecast>=0.0.16,<0.1",  # keep upper bound to avoid unexpected breaking changes
     "fugue>=0.9.0",  # prevent dependency clash with omegaconf
     "tqdm",  # version range defined in `core/_setup_utils.py`
     "orjson~=3.9",  # use faster JSON implementation in GluonTS

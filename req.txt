@@ -1,0 +1,36 @@
+# Core scientific stack
+numpy
+pandas
+scipy
+psutil
+tqdm
+Pillow
+
+# ML + Forecasting
+scikit-learn
+statsmodels
+pytorch-metric-learning
+lightning>=2.3.0
+torch
+torchvision
+torchmetrics
+timm
+transformers
+
+# Utilities
+networkx
+boto3
+requests
+smart_open
+omegaconf
+nptyping
+pytest
+nlpaug
+nltk
+scikit-image
+fairscale
+
+# Time-series libraries with Python 3.12 compatibility pins
+gluonts==0.15
+mxnet
+sktime==0.27.0

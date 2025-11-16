@@ -18,6 +18,7 @@ from ..common import (
     DATAFRAME_WITH_STATIC,
     DUMMY_TS_DATAFRAME,
     DUMMY_VARIABLE_LENGTH_TS_DATAFRAME,
+    ITEM_ID_TO_LENGTH,
     get_data_frame_with_variable_lengths,
 )
 
@@ -37,7 +38,7 @@ def test_when_covariates_and_features_present_then_train_and_val_dfs_have_correc
     lags,
 ):
     item_id_to_length = {1: 30, 5: 40, 2: 25}
-    data = get_data_frame_with_variable_lengths(item_id_to_length, covariates_names=known_covariates_names)
+    data = get_data_frame_with_variable_lengths(item_id_to_length, covariates_names=covariates_names)
     if static_features_names:
         columns = {k: np.random.normal(size=len(item_id_to_length)) for k in static_features_names}
         data.static_features = pd.DataFrame(columns, index=data.item_ids)
@@ -139,6 +140,26 @@ def test_when_covariates_and_features_present_then_model_can_predict(temp_model_
     predictions = model.predict(data_train, known_covariates=known_covariates)
     assert isinstance(predictions, TimeSeriesDataFrame)
     assert len(predictions) == data.num_items * model.prediction_length
+
+
+def test_when_past_covariates_present_then_lag_features_created(temp_model_path, mlforecast_model_class):
+    data = get_data_frame_with_variable_lengths(
+        ITEM_ID_TO_LENGTH,
+        covariates_names=["known_cat", "past_real"],
+    )
+    feat_gen = TimeSeriesFeatureGenerator(target="target", known_covariates_names=["known_cat"])
+    data = feat_gen.fit_transform(data)
+    model = mlforecast_model_class(
+        path=temp_model_path,
+        freq=data.freq,
+        prediction_length=3,
+        covariate_metadata=feat_gen.covariate_metadata,
+    )
+    model.fit(train_data=data, time_limit=3)
+    train_df, _ = model._generate_train_val_dfs(data)
+    past_lag_columns = [col for col in train_df.columns if col.startswith("past_real_lag")]
+    assert len(past_lag_columns) > 0
+    assert "past_real" not in train_df.columns
 
 
 @pytest.mark.parametrize("eval_metric", ["RMSE", "WQL", "MAPE", None])
