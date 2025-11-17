@@ -328,7 +328,8 @@ class AbstractMLForecastModel(AbstractTimeSeriesModel):
         elif not include_target and len(self._past_covariate_lag_columns) > 0:
             missing_columns = [col for col in self._past_covariate_lag_columns if col not in df.columns]
             if missing_columns:
-                df[missing_columns] = np.nan
+                assign_dict = {col: np.nan for col in missing_columns}
+                df = df.assign(**assign_dict)
 
         for col in self._non_boolean_real_covariates:
             # Normalize non-boolean features using mean_abs scaling
@@ -348,6 +349,50 @@ class AbstractMLForecastModel(AbstractTimeSeriesModel):
 
         # We assume that df is sorted by 'unique_id' inside `TimeSeriesPredictor._check_and_prepare_data_frame`
         return df
+
+    def _prepare_future_covariate_features(
+        self,
+        data: TimeSeriesDataFrame,
+        future_known_covariates: Optional[TimeSeriesDataFrame],
+    ) -> Optional[pd.DataFrame]:
+        """Construct DataFrame of future exogenous features (known + past covariate lags)."""
+        if future_known_covariates is None:
+            future_index = self.get_forecast_horizon_index(data)
+            future_known_covariates = TimeSeriesDataFrame(
+                pd.DataFrame(index=future_index, columns=[], dtype="float32")
+            )
+        future_cov = future_known_covariates.copy()
+
+        all_known = self.covariate_metadata.known_covariates
+        missing_known = [col for col in all_known if col not in future_cov.columns]
+        if missing_known:
+            future_cov = future_cov.assign(**{col: np.nan for col in missing_known})
+
+        past_covariates = self.covariate_metadata.past_covariates
+        if len(past_covariates) == 0:
+            X_df = self._to_mlforecast_df(future_cov, data.static_features, include_target=False)
+            return X_df if len(X_df.columns.difference([MLF_ITEMID, MLF_TIMESTAMP])) else None
+
+        if len(self.covariate_metadata.covariates) > 0:
+            history_cov = TimeSeriesDataFrame(data[self.covariate_metadata.covariates])
+        else:
+            history_cov = None
+        assign_dict = {col: np.nan for col in past_covariates if col not in future_cov.columns}
+        if assign_dict:
+            future_cov = future_cov.assign(**assign_dict)
+        frames = [history_cov] if history_cov is not None else []
+        frames.append(future_cov)
+        combined_cov = TimeSeriesDataFrame(pd.concat(frames))
+
+        df_with_lags = self._to_mlforecast_df(combined_cov, data.static_features, include_target=False)
+        df_with_lags = df_with_lags.set_index([MLF_ITEMID, MLF_TIMESTAMP])
+        future_idx = future_cov.index.rename(
+            {TimeSeriesDataFrame.ITEMID: MLF_ITEMID, TimeSeriesDataFrame.TIMESTAMP: MLF_TIMESTAMP}
+        )
+        future_with_lags = df_with_lags.loc[future_idx].reset_index()
+        if len(future_with_lags.columns.difference([MLF_ITEMID, MLF_TIMESTAMP])) == 0:
+            return None
+        return future_with_lags
 
     def _fit(
         self,
@@ -763,15 +808,7 @@ class RecursiveTabularModel(AbstractMLForecastModel):
         new_df = self._to_mlforecast_df(data, data.static_features)
         if self._max_ts_length is not None:
             new_df = self._shorten_all_series(new_df, self._max_ts_length)
-        if known_covariates is None:
-            future_index = self.get_forecast_horizon_index(data)
-            known_covariates = TimeSeriesDataFrame(
-                pd.DataFrame(columns=[self.target], index=future_index, dtype="float32")
-            )
-        X_df = self._to_mlforecast_df(known_covariates, data.static_features, include_target=False)
-        # If both covariates & static features are missing, set X_df = None to avoid exception from MLForecast
-        if len(X_df.columns.difference([MLF_ITEMID, MLF_TIMESTAMP])) == 0:
-            X_df = None
+        X_df = self._prepare_future_covariate_features(data, known_covariates)
         with warning_filter():
             raw_predictions = self._mlf.predict(
                 h=self.prediction_length,
